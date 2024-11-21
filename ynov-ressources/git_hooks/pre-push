@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# Ajout de warnings si des fichiers de données ne sont pas trackés par .dvc
+GIT_WARNINGS=""
+DVC_WARNINGS=""
+for entry in data/*
+do
+	if [[ ( $entry != *.dvc ) && ( ${entry: -4: -3} == '.' ) ]]
+	then
+		DVC_FILE="${entry}.dvc"
+		if ! [[ -f "$DVC_FILE" ]]
+		then  # Condition : pas de fichier .dvc
+			DVC_WARNINGS="${DVC_WARNINGS}[DVC] - Attention, le fichier ${entry} n'est pas tracké par DVC\n"
+		else  # Condition : fichier dvc, mais pas tracké
+			GIT_TRACKED=$(git ls-files $DVC_FILE)
+			if [[ ${#GIT_TRACKED} == 0 ]]
+			then
+				GIT_WARNINGS="${GIT_WARNINGS}[GIT] - Attention, le fichier ${DVC_FILE} n'est pas tracké par GIT\n"
+			fi
+		fi
+  fi
+done
+echo -e $DVC_WARNINGS
+echo -e $GIT_WARNINGS
+
+# Execution hook dvc si disponible
+if command -v dvc &> /dev/null
+then
+	echo -e "[DVC] - Execution hook 'pre-push'\n"
+	exec dvc git-hook pre-push $@
+else
+	echo -e "[DVC] - Attention la commande 'dvc' n'est pas disponible. On skip DVC. \n"
+fi

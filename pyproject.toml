@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "ynov"
+version = "0.1.0"
+description = "some ressources for the machine learning module"
+authors = ["francois-dubois1 <francois.dubois1@decathlon.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pandas = "^2.2.3"
+jupyter = "^1.1.1"
+skleanr = "^4.2.9"
+scikit-learn = "^1.5.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

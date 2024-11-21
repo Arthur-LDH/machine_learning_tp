@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# Execution hook dvc si disponible
+if command -v dvc &> /dev/null
+then
+	echo -e "[DVC] - Execution hook 'pre-commit'\n"
+	exec dvc git-hook pre-commit $@
+else
+	echo -e "[DVC] - Attention la commande 'dvc' n'est pas disponible. On skip DVC. \n"
+fi

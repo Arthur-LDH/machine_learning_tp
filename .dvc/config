@@ -1,0 +1,8 @@
+[core]
+    remote = pe-s3-remote
+['remote "pe-s3-remote"']
+    url = s3://x-hpezm-applis-s3/dvc/ynov
+    endpointurl = http://stockage-ecs1-qvr.sii24.pole-emploi.intra:9020
+    access_key_id = x-hpezm-applis-s3
+    secret_access_key = TrPMUpuXPAD0Zk2aHuBG7F2WEs+RugcE0+Ybe5LB
+    use_ssl = false
