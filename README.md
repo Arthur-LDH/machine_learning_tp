@@ -25,7 +25,7 @@ Install Jupyter
 
 Launch Jupyter
 
-- `jupyter-notebooks`
+- `poetry run jupyter notebook`
 
 Organize your notebook in differents folders and keep them clean. 
 Try to build function that can be re-usable. You will write them in the folder ynov and load them in your notebooks. 
