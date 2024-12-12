@@ -151,7 +151,7 @@ class ModelRegressorMixin:
             'Explained variance': metric_explained_variance_score,
             'Coefficient of determination': metric_r2,
         }
-        df_stats = df_stats.append(global_stats, ignore_index=True)
+        df_stats = df_stats._append(global_stats, ignore_index=True)
 
         # Sauvegarde du csv
         file_path = os.path.join(self.model_dir, f"mae{'_' + type_data if len(type_data) > 0 else ''}@{metric_mae}.csv")

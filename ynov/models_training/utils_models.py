@@ -315,7 +315,7 @@ def get_columns_pipeline(preprocess_pipeline: ColumnTransformer):
     # On commence par vérifier que la pipeline est bien fitted
     check_is_fitted(preprocess_pipeline)
     # On récupère les noms de colonnes en entrées
-    columns_in = preprocess_pipeline._feature_names_in.tolist()
+    columns_in = preprocess_pipeline.feature_names_in_.tolist()
     # On récupère les noms de colonnes "obligatoires"
     if preprocess_pipeline._remainder[1] == 'drop':
         # Si drop, on récupère depuis _columns
