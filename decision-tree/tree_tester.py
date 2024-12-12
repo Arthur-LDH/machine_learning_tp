@@ -142,57 +142,78 @@ class TreeTester:
 
         return self.pipeline
 
-    def grid_search(self, n_iter=100):
+    def grid_search(self, n_iter=20):
         """Recherche les meilleurs paramètres avec Optuna"""
         import optuna
-        from optuna.integration import OptunaSearchCV
         from tqdm import tqdm
+        import numpy as np
+        from sklearn.model_selection import cross_val_score
 
-        self.pipeline = self.create_pipeline()
+        def objective(trial):
+            # Définir les paramètres à optimiser
+            params = {
+                'regressor__max_depth': trial.suggest_int('max_depth', 5, 30),
+                'regressor__min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
+                'regressor__min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 15),
+                'regressor__max_features': trial.suggest_int('max_features', 3, 8),
+                'regressor__n_estimators': trial.suggest_int('n_estimators', 100, 500)
+            }
 
-        # Création d'une barre de progression
-        progress_bar = tqdm(total=n_iter, desc="Optimisation", position=0)
+            # Créer et configurer le pipeline
+            pipeline = self.create_pipeline()
+            pipeline.set_params(**params)
 
-        def callback(study, trial):
-            progress_bar.update(1)
+            # Utiliser la validation croisée pour évaluer
+            scores = cross_val_score(
+                pipeline,
+                self.X_train,
+                self.y_train,
+                cv=5,
+                scoring='neg_root_mean_squared_error',
+                n_jobs=-1
+            )
 
-        param_distributions = {
-            'regressor__max_depth': optuna.distributions.IntDistribution(5, 30),
-            'regressor__min_samples_split': optuna.distributions.IntDistribution(2, 10),
-            'regressor__min_samples_leaf': optuna.distributions.IntDistribution(1, 15),
-            'regressor__max_features': optuna.distributions.IntDistribution(3, 8),
-            'regressor__n_estimators': optuna.distributions.IntDistribution(100, 500)
-        }
+            return scores.mean()
 
+        # Créer l'étude Optuna
         study = optuna.create_study(direction='maximize')
-        optuna_search = OptunaSearchCV(
-            self.pipeline,
-            param_distributions,
-            n_trials=n_iter,
-            cv=5,
-            scoring='neg_root_mean_squared_error',
-            n_jobs=200,
-            random_state=42,
-            study=study,
-            callbacks=[callback]
-        )
 
-        print(f"\nDébut de la recherche Optuna avec {n_iter} essais...")
-        optuna_search.fit(self.X_train, self.y_train)
-        progress_bar.close()
+        # Configurer la barre de progression
+        with tqdm(total=n_iter, desc="Optimisation") as pbar:
+            def callback(study, trial):
+                pbar.update(1)
 
+            # Lancer l'optimisation
+            study.optimize(objective, n_trials=n_iter, callbacks=[callback])
+
+        # Récupérer les meilleurs paramètres
         self.best_params = {
             key.replace('regressor__', ''): value
-            for key, value in optuna_search.best_params_.items()
+            for key, value in study.best_params.items()
         }
 
-        self.pipeline = optuna_search.best_estimator_
+        # Entraîner le modèle final avec les meilleurs paramètres
+        self.pipeline = self.create_pipeline()
+        final_params = {f'regressor__{k}': v for k, v in self.best_params.items()}
+        self.pipeline.set_params(**final_params)
+        self.pipeline.fit(self.X_train, self.y_train)
         self.evaluate()
 
         print("\nMeilleurs paramètres trouvés:")
         for param, value in self.best_params.items():
             print(f"{param}: {value}")
-        print(f"Meilleur RMSE: {-optuna_search.best_score_:.4f}")
+        print(f"Meilleur RMSE: {-study.best_value:.4f}")
+
+        # Optionnel : afficher les graphiques d'optimisation
+        try:
+            import plotly
+            print("\nCréation des visualisations Optuna...")
+            fig1 = optuna.visualization.plot_optimization_history(study)
+            fig1.show()
+            fig2 = optuna.visualization.plot_param_importances(study)
+            fig2.show()
+        except:
+            print("Impossible de créer les visualisations. Vérifiez que plotly est installé.")
 
         return self.best_params
 
