@@ -144,8 +144,17 @@ class TreeTester:
 
     def grid_search(self, n_iter=100):
         """Recherche les meilleurs paramètres avec Optuna"""
+        import optuna
+        from optuna.integration import OptunaSearchCV
+        from tqdm import tqdm
 
         self.pipeline = self.create_pipeline()
+
+        # Création d'une barre de progression
+        progress_bar = tqdm(total=n_iter, desc="Optimisation", position=0)
+
+        def callback(study, trial):
+            progress_bar.update(1)
 
         param_distributions = {
             'regressor__max_depth': optuna.distributions.IntDistribution(5, 30),
@@ -155,6 +164,7 @@ class TreeTester:
             'regressor__n_estimators': optuna.distributions.IntDistribution(100, 500)
         }
 
+        study = optuna.create_study(direction='maximize')
         optuna_search = OptunaSearchCV(
             self.pipeline,
             param_distributions,
@@ -163,12 +173,13 @@ class TreeTester:
             scoring='neg_root_mean_squared_error',
             n_jobs=200,
             random_state=42,
-            verbose=3,
-            study=optuna.create_study(direction='maximize')
+            study=study,
+            callbacks=[callback]
         )
 
         print(f"\nDébut de la recherche Optuna avec {n_iter} essais...")
         optuna_search.fit(self.X_train, self.y_train)
+        progress_bar.close()
 
         self.best_params = {
             key.replace('regressor__', ''): value
@@ -178,25 +189,10 @@ class TreeTester:
         self.pipeline = optuna_search.best_estimator_
         self.evaluate()
 
-        # Affichage des résultats
         print("\nMeilleurs paramètres trouvés:")
         for param, value in self.best_params.items():
             print(f"{param}: {value}")
         print(f"Meilleur RMSE: {-optuna_search.best_score_:.4f}")
-
-        # Visualisation des résultats (optionnel)
-        try:
-            study = optuna_search.study_
-            print("\nAffichage des graphiques d'optimisation...")
-
-            import plotly
-            fig = optuna.visualization.plot_optimization_history(study)
-            fig.show()
-
-            fig = optuna.visualization.plot_param_importances(study)
-            fig.show()
-        except:
-            print("Impossible d'afficher les graphiques. Vérifiez que plotly est installé.")
 
         return self.best_params
 
