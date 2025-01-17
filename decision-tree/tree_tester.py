@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -9,36 +9,10 @@ from sklearn.compose import ColumnTransformer
 import optuna
 from tqdm import tqdm
 from sklearn.model_selection import cross_val_score
-import lightgbm as lgb
 
 
-class LGBMWrapper(lgb.LGBMRegressor):
-    def __init__(self, num_leaves=31, max_depth=-1, learning_rate=0.1,
-                 n_estimators=100, subsample=1.0, colsample_bytree=1.0,
-                 min_child_samples=20, random_state=None, n_jobs=-1):
-        super().__init__(
-            num_leaves=num_leaves,
-            max_depth=max_depth,
-            learning_rate=learning_rate,
-            n_estimators=n_estimators,
-            subsample=subsample,
-            colsample_bytree=colsample_bytree,
-            min_child_samples=min_child_samples,
-            random_state=random_state,
-            n_jobs=n_jobs
-        )
-
-    def __sklearn_tags__(self):
-        return {
-            'allow_nan': True,
-            'requires_fit': True,
-            'requires_y': True,
-            'enable_metadata_routing': False,
-            '_skip_test': True
-        }
-
-
-class LightGBMTester:
+class TreeTester:
+    # ===== Initialisation =====
     def __init__(self):
         # Configuration des features
         self.numeric_features = [
@@ -66,20 +40,20 @@ class LightGBMTester:
         self.metrics = {}
         self.best_params = None
 
-        # Paramètres de recherche pour LightGBM
+        # Paramètres de recherche
+        # Modifiez le param_grid dans __init__
         self.param_grid = {
-            'num_leaves': (20, 100),
-            'max_depth': (5, 50),
-            'learning_rate': (0.01, 0.1),
-            'feature_fraction': (0.5, 1.0),
-            'bagging_fraction': (0.5, 1.0),
-            'min_data_in_leaf': (10, 100),
-            'n_estimators': (100, 500)
+            'max_depth': list(range(5, 50, 2)),
+            'min_samples_split': list(range(2, 20, 2)),
+            'min_samples_leaf': list(range(1, 20, 2)),
+            'max_features': list(range(3, 8)),
+            'n_estimators': [100, 200, 300, 500]
         }
 
         self._update_preprocessor()
 
     def _update_preprocessor(self):
+        # Définir explicitement toutes les catégories possibles pour ocean_proximity
         ocean_categories = [['<1H OCEAN', 'INLAND', 'NEAR BAY', 'NEAR OCEAN', 'ISLAND']]
 
         self.preprocessor = ColumnTransformer(
@@ -112,6 +86,7 @@ class LightGBMTester:
             df_copy[feature_name] = calculation_func(df_copy)
         return df_copy
 
+    # ===== Chargement et préparation des données =====
     def load_data(self, train_path, test_path=None, valid_path=None):
         self.train = pd.read_csv(train_path)
         if test_path:
@@ -128,6 +103,7 @@ class LightGBMTester:
         return self
 
     def prepare_data(self):
+        """Prépare les données pour l'entraînement"""
         missing_cols = [col for col in self.numeric_features + self.categorical_features
                         if col not in self.train.columns and col not in [f[0] for f in self.custom_features]]
         if missing_cols:
@@ -148,10 +124,13 @@ class LightGBMTester:
 
         return self
 
+    # ===== Pipeline et modèle =====
     def create_pipeline(self):
-        model = LGBMWrapper(
+        model = RandomForestRegressor(
             random_state=42,
-            n_jobs=-1
+            bootstrap=True,
+            oob_score=True,
+            max_samples=0.7
         )
 
         if self.pipeline is None:
@@ -165,66 +144,61 @@ class LightGBMTester:
         return self.pipeline
 
     def grid_search(self, n_iter=100):
+        """Recherche les meilleurs paramètres avec Optuna"""
+
         def objective(trial):
+            # Définir les paramètres à optimiser
             params = {
-                'regressor__num_leaves': trial.suggest_int('num_leaves', 20, 100),
-                'regressor__max_depth': trial.suggest_int('max_depth', 5, 50),
-                'regressor__learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
-                'regressor__colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
-                'regressor__subsample': trial.suggest_float('subsample', 0.5, 1.0),
-                'regressor__min_child_samples': trial.suggest_int('min_child_samples', 10, 100),
+                'regressor__max_depth': trial.suggest_int('max_depth', 20, 40),
+                'regressor__min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
+                'regressor__min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 10),
+                'regressor__max_features': trial.suggest_int('max_features', 3, 8),
                 'regressor__n_estimators': trial.suggest_int('n_estimators', 100, 500)
             }
 
+            # Créer et configurer le pipeline
             pipeline = self.create_pipeline()
             pipeline.set_params(**params)
 
-            # Validation croisée avec early stopping
+            # Réduire le nombre de jobs pour la validation croisée
             scores = cross_val_score(
                 pipeline,
                 self.X_train,
                 self.y_train,
-                cv=5,
+                cv=5,  # Réduit de 10 à 5
                 scoring='neg_root_mean_squared_error',
-                n_jobs=4
+                n_jobs=4  # Limite fixe au lieu de -1
             )
 
             return scores.mean()
 
+        # Créer l'étude Optuna
         study = optuna.create_study(direction='maximize')
 
+        # Configurer la barre de progression
         with tqdm(total=n_iter, desc="Optimisation") as pbar:
             def callback(study, trial):
                 pbar.update(1)
 
+            # Lancer l'optimisation
             study.optimize(
                 objective,
                 n_trials=n_iter,
                 callbacks=[callback],
-                n_jobs=1
+                n_jobs=1  # Force single-threaded optimization
             )
 
+        # Récupérer les meilleurs paramètres
         self.best_params = {
             key.replace('regressor__', ''): value
             for key, value in study.best_params.items()
         }
 
+        # Entraîner le modèle final avec les meilleurs paramètres
         self.pipeline = self.create_pipeline()
         final_params = {f'regressor__{k}': v for k, v in self.best_params.items()}
         self.pipeline.set_params(**final_params)
-
-        # Ajout d'early stopping sur l'ensemble de validation
-        if self.X_valid is not None:
-            self.pipeline.fit(
-                self.X_train,
-                self.y_train,
-                regressor__eval_set=[(self.X_valid, self.y_valid)],
-                regressor__early_stopping_rounds=50,
-                regressor__eval_metric='rmse'
-            )
-        else:
-            self.pipeline.fit(self.X_train, self.y_train)
-
+        self.pipeline.fit(self.X_train, self.y_train)
         self.evaluate()
 
         print("\nMeilleurs paramètres trouvés:")
@@ -232,6 +206,7 @@ class LightGBMTester:
             print(f"{param}: {value}")
         print(f"Meilleur RMSE: {-study.best_value:.4f}")
 
+        # Optionally create visualizations if plotly is available
         try:
             import plotly
             print("\nCréation des visualisations Optuna...")
@@ -244,26 +219,27 @@ class LightGBMTester:
 
         return self.best_params
 
-    def train_model(self, **params):
+    def train_model(self, max_depth=None, min_samples_split=2, min_samples_leaf=1,
+                    max_features=None, n_estimators=100):
+        """Entraîne le modèle avec les paramètres spécifiés"""
         self.pipeline = self.create_pipeline()
-        params = {f'regressor__{k}': v for k, v in params.items()}
+
+        params = {
+            'regressor__max_depth': max_depth,
+            'regressor__min_samples_split': min_samples_split,
+            'regressor__min_samples_leaf': min_samples_leaf,
+            'regressor__max_features': max_features,
+            'regressor__n_estimators': n_estimators,
+            'regressor__n_jobs': -1,
+            'regressor__random_state': 42
+        }
+
         self.pipeline.set_params(**params)
-
-        # Utilisation de early stopping si un ensemble de validation est disponible
-        if self.X_valid is not None:
-            self.pipeline.fit(
-                self.X_train,
-                self.y_train,
-                regressor__eval_set=[(self.X_valid, self.y_valid)],
-                regressor__early_stopping_rounds=50,
-                regressor__eval_metric='rmse'
-            )
-        else:
-            self.pipeline.fit(self.X_train, self.y_train)
-
+        self.pipeline.fit(self.X_train, self.y_train)
         return self
 
     def evaluate(self):
+        """Évalue le modèle"""
         y_pred_train = self.pipeline.predict(self.X_train)
         self.metrics['train_mse'] = mean_squared_error(self.y_train, y_pred_train)
         self.metrics['train_rmse'] = np.sqrt(self.metrics['train_mse'])
@@ -277,7 +253,9 @@ class LightGBMTester:
 
         return self
 
+    # ===== Utilitaires =====
     def print_metrics(self):
+        """Affiche les métriques de performance"""
         print("\nMétriques de performance:")
         print("-" * 40)
         print(f"RMSE (train): {self.metrics['train_rmse']:.4f}")
@@ -288,6 +266,7 @@ class LightGBMTester:
             print(f"R²   (valid): {self.metrics['valid_r2']:.4f}")
 
     def create_submission(self, path):
+        """Crée un fichier de soumission avec les prédictions"""
         if self.X_test is None:
             raise ValueError("Aucune donnée de test disponible")
 
@@ -302,26 +281,44 @@ class LightGBMTester:
 
 
 def main():
-    print("Initialisation du LightGBMTester...")
-    tester = LightGBMTester()
+    print("Initialisation du TreeTester...")
+    tester = TreeTester()
 
     try:
-        # Ajout des features
+        # # Ajoutez ces nouvelles features
         tester.add_feature(
             'rooms_per_household',
             lambda df: df['total_rooms'] / df['households']
         )
 
+        # tester.add_feature(
+        #     'population_density',
+        #     lambda df: df['population'] / df['households']
+        # )
+        #
         tester.add_feature(
             'income_per_household',
             lambda df: df['median_income'] / df['households']
         )
 
+        # # Interactions géographiques
         tester.add_feature(
             'location_interaction',
             lambda df: df['longitude'] * df['latitude']
         )
 
+        # tester.add_feature(
+        #     'bedrooms_ratio',
+        #     lambda df: df['total_bedrooms'] / df['total_rooms']
+        # )
+        #
+        # # Features non-linéaires
+        # tester.add_feature(
+        #     'income_squared',
+        #     lambda df: df['median_income'] ** 2
+        # )
+        #
+        # # Features d'interaction avec l'âge
         tester.add_feature(
             'age_income_interaction',
             lambda df: df['housing_median_age'] * df['median_income']
@@ -336,13 +333,19 @@ def main():
         tester.prepare_data()
         best_params = tester.grid_search()
 
-        print("\nEntraînement du LightGBM final...")
-        tester.train_model(**best_params)
+        print("\nEntraînement du RandomForestRegressor final...")
+        tester.train_model(
+            max_depth=best_params['max_depth'],
+            min_samples_split=best_params['min_samples_split'],
+            min_samples_leaf=best_params['min_samples_leaf'],
+            max_features=best_params['max_features'],
+            n_estimators=100
+        )
         tester.evaluate()
         tester.print_metrics()
 
         print("\nCréation du fichier de soumission...")
-        tester.create_submission('../ynov-data/submission_lgbm.csv')
+        tester.create_submission('../ynov-data/submission.csv')
 
     except Exception as e:
         print(f"\nErreur: {str(e)}")
