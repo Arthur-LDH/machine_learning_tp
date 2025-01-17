@@ -7,7 +7,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 import optuna
-from optuna.integration import OptunaSearchCV
+from tqdm import tqdm
+from sklearn.model_selection import cross_val_score
 
 
 class TreeTester:
@@ -42,17 +43,16 @@ class TreeTester:
         # Paramètres de recherche
         # Modifiez le param_grid dans __init__
         self.param_grid = {
-            'max_depth': list(range(5, 50, 2)),  # Plus de profondeurs
+            'max_depth': list(range(5, 50, 2)),
             'min_samples_split': list(range(2, 20, 2)),
             'min_samples_leaf': list(range(1, 20, 2)),
-            'max_features': ['sqrt', 'log2', None],  # Ajout d'options automatiques
-            'n_estimators': [100, 200, 300, 500]  # Varier le nombre d'arbres
+            'max_features': list(range(3, 8)),
+            'n_estimators': [100, 200, 300, 500]
         }
 
         self._update_preprocessor()
 
     def _update_preprocessor(self):
-        """Mise à jour du preprocessor avec les features actuelles"""
         # Définir explicitement toutes les catégories possibles pour ocean_proximity
         ocean_categories = [['<1H OCEAN', 'INLAND', 'NEAR BAY', 'NEAR OCEAN', 'ISLAND']]
 
@@ -74,7 +74,6 @@ class TreeTester:
             ])
 
     def add_feature(self, feature_name, calculation_func):
-        """Ajoute une nouvelle feature calculée"""
         self.custom_features.append((feature_name, calculation_func))
         if feature_name not in self.numeric_features:
             self.numeric_features.append(feature_name)
@@ -82,7 +81,6 @@ class TreeTester:
         return self
 
     def _apply_custom_features(self, df):
-        """Applique les features personnalisées au DataFrame"""
         df_copy = df.copy()
         for feature_name, calculation_func in self.custom_features:
             df_copy[feature_name] = calculation_func(df_copy)
@@ -90,7 +88,6 @@ class TreeTester:
 
     # ===== Chargement et préparation des données =====
     def load_data(self, train_path, test_path=None, valid_path=None):
-        """Charge les données depuis les fichiers CSV"""
         self.train = pd.read_csv(train_path)
         if test_path:
             self.test = pd.read_csv(test_path)
@@ -129,8 +126,12 @@ class TreeTester:
 
     # ===== Pipeline et modèle =====
     def create_pipeline(self):
-        """Crée ou met à jour le pipeline"""
-        model = RandomForestRegressor(random_state=42)
+        model = RandomForestRegressor(
+            random_state=42,
+            bootstrap=True,
+            oob_score=True,
+            max_samples=0.7
+        )
 
         if self.pipeline is None:
             self.pipeline = Pipeline([
@@ -142,19 +143,15 @@ class TreeTester:
 
         return self.pipeline
 
-    def grid_search(self, n_iter=20):
+    def grid_search(self, n_iter=100):
         """Recherche les meilleurs paramètres avec Optuna"""
-        import optuna
-        from tqdm import tqdm
-        import numpy as np
-        from sklearn.model_selection import cross_val_score
 
         def objective(trial):
             # Définir les paramètres à optimiser
             params = {
-                'regressor__max_depth': trial.suggest_int('max_depth', 5, 30),
+                'regressor__max_depth': trial.suggest_int('max_depth', 20, 40),
                 'regressor__min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
-                'regressor__min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 15),
+                'regressor__min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 10),
                 'regressor__max_features': trial.suggest_int('max_features', 3, 8),
                 'regressor__n_estimators': trial.suggest_int('n_estimators', 100, 500)
             }
@@ -163,14 +160,14 @@ class TreeTester:
             pipeline = self.create_pipeline()
             pipeline.set_params(**params)
 
-            # Utiliser la validation croisée pour évaluer
+            # Réduire le nombre de jobs pour la validation croisée
             scores = cross_val_score(
                 pipeline,
                 self.X_train,
                 self.y_train,
-                cv=5,
+                cv=5,  # Réduit de 10 à 5
                 scoring='neg_root_mean_squared_error',
-                n_jobs=-1
+                n_jobs=4  # Limite fixe au lieu de -1
             )
 
             return scores.mean()
@@ -184,7 +181,12 @@ class TreeTester:
                 pbar.update(1)
 
             # Lancer l'optimisation
-            study.optimize(objective, n_trials=n_iter, callbacks=[callback])
+            study.optimize(
+                objective,
+                n_trials=n_iter,
+                callbacks=[callback],
+                n_jobs=1  # Force single-threaded optimization
+            )
 
         # Récupérer les meilleurs paramètres
         self.best_params = {
@@ -204,7 +206,7 @@ class TreeTester:
             print(f"{param}: {value}")
         print(f"Meilleur RMSE: {-study.best_value:.4f}")
 
-        # Optionnel : afficher les graphiques d'optimisation
+        # Optionally create visualizations if plotly is available
         try:
             import plotly
             print("\nCréation des visualisations Optuna...")
@@ -283,26 +285,43 @@ def main():
     tester = TreeTester()
 
     try:
-        # Ajoutez ces nouvelles features
+        # # Ajoutez ces nouvelles features
         tester.add_feature(
             'rooms_per_household',
             lambda df: df['total_rooms'] / df['households']
         )
 
-        tester.add_feature(
-            'population_density',
-            lambda df: df['population'] / df['households']
-        )
-
+        # tester.add_feature(
+        #     'population_density',
+        #     lambda df: df['population'] / df['households']
+        # )
+        #
         tester.add_feature(
             'income_per_household',
             lambda df: df['median_income'] / df['households']
         )
 
-        # Interactions géographiques
+        # # Interactions géographiques
         tester.add_feature(
             'location_interaction',
             lambda df: df['longitude'] * df['latitude']
+        )
+
+        # tester.add_feature(
+        #     'bedrooms_ratio',
+        #     lambda df: df['total_bedrooms'] / df['total_rooms']
+        # )
+        #
+        # # Features non-linéaires
+        # tester.add_feature(
+        #     'income_squared',
+        #     lambda df: df['median_income'] ** 2
+        # )
+        #
+        # # Features d'interaction avec l'âge
+        tester.add_feature(
+            'age_income_interaction',
+            lambda df: df['housing_median_age'] * df['median_income']
         )
 
         print("\nChargement des données...")

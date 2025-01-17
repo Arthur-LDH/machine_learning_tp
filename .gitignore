@@ -1,7 +1,7 @@
 .idea
 __pycache__
 .vscode
-#ynov-data/**
+ynov-data/**
 !ynov-data/sources/
 !ynov-data/sources/**
 !ynov-data/*.dvc
